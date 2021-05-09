@@ -55,4 +55,5 @@ def split(data_path, train_path, dev_path, percent=0.2):
 if __name__ == '__main__':
     # transform_asp(os.path.join(DATA_PATH, 'train.xml'), os.path.join(DATA_PATH, 'data.json'))
     # transform_asp(os.path.join(DATA_PATH, 'dev.xml'), os.path.join(DATA_PATH, 'dev.json'))
-    split(os.path.join(DATA_PATH, 'data.json'), os.path.join(DATA_PATH, 'train.json'), os.path.join(DATA_PATH, 'dev.json'))
+    transform_asp(os.path.join(DATA_PATH, 'test.xml'), os.path.join(DATA_PATH, 'test.json'))
+    # split(os.path.join(DATA_PATH, 'data.json'), os.path.join(DATA_PATH, 'train.json'), os.path.join(DATA_PATH, 'dev.json'))

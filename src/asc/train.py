@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import math
 from argparse import ArgumentParser
@@ -15,7 +16,7 @@ from asc.model import AspectClassifier
 from asc.data import SemDataset, collate_batch
 from asc.optimizer import LabelSmoothingLoss
 from cfg import *
-from utils import compute_f_score
+from utils import compute_f_score, save_model
 
 def train():
     parser = ArgumentParser()
@@ -37,7 +38,7 @@ def train():
     parser.add_argument("--valid_steps", type=int, default=50, help="Perfom validation every X steps")
     parser.add_argument("--num_classes", type=int, default=3, help="Num of classes for classification")
     parser.add_argument("--dropout", type=int, default=0.1, help="Rate of dropout")
-    parser.add_argument("--smoothing", type=int, default=0.0, help="Rate of label smoothing")
+    parser.add_argument("--smoothing", type=int, default=0.1, help="Rate of label smoothing")
     args = parser.parse_args()
     acc_steps = args.acc_batch_size // args.batch_size
 
@@ -81,9 +82,9 @@ def train():
     linear_lambda = lambda epoch: (0.9 * epoch / warmup_steps + 0.1) if epoch < warmup_steps else 1
     scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=linear_lambda)
     criterion = LabelSmoothingLoss(args.num_classes, smoothing=args.smoothing)
-    # criterion = CrossEntropyLoss()
 
     train_loss = []
+    best_f_score = 0.0
     for epoch in range(args.n_epochs):
         for step, batch in enumerate(tqdm(train_dataloader)):
             model.train()
@@ -134,10 +135,14 @@ def train():
                         f_sum += f
                         pre_sum += pre
                         rec_sum += rec
+                    f_score = f_sum / args.num_classes
                     writer_dev.add_scalar('acc', correct / total, global_steps)
-                    writer_dev.add_scalar('f1', f_sum / args.num_classes, global_steps)
+                    writer_dev.add_scalar('f1', f_score, global_steps)
                     writer_dev.add_scalar('pre', pre_sum / args.num_classes, global_steps)
                     writer_dev.add_scalar('rec', rec_sum / args.num_classes, global_steps)
+                    if f_score > best_f_score:
+                        best_f_score = f_score
+                        save_model(model, score=best_f_score)
 
 if __name__ == '__main__':
     train()
