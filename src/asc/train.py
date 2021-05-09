@@ -1,12 +1,13 @@
 import os
 import time
+import math
 from argparse import ArgumentParser
 from tqdm import tqdm
 import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
-from torch.optim import AdamW
+from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from transformers import RobertaTokenizer, RobertaModel
@@ -14,6 +15,7 @@ from asc.model import AspectClassifier
 from asc.data import SemDataset, collate_batch
 from asc.optimizer import LabelSmoothingLoss
 from cfg import *
+from utils import compute_f_score
 
 def train():
     parser = ArgumentParser()
@@ -22,18 +24,20 @@ def train():
     # parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
     parser.add_argument("--model_checkpoint", type=str, default='roberta-base',
                         help="Path, url or short name of the model")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch size for training")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training")
     parser.add_argument("--acc_batch_size", type=int, default=32,
                         help="Accumulate gradients on several steps")
     parser.add_argument("--lr", type=float, default=2e-5, help="Learning rate")
-    parser.add_argument("--n_epochs", type=int, default=20, help="Number of training epochs")
+    parser.add_argument("--n_epochs", type=int, default=40, help="Number of training epochs")
     parser.add_argument("--eval_before_start", action='store_true',
                         help="If true start with a first evaluation before training")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")
-    parser.add_argument("--warmup_steps", type=int, default=2000, help="Warm up steps")
-    parser.add_argument("--valid_steps", type=int, default=2000, help="Perfom validation every X steps")
+    parser.add_argument("--warmup_rate", type=int, default=0.01, help="Warm up steps")
+    parser.add_argument("--valid_steps", type=int, default=50, help="Perfom validation every X steps")
     parser.add_argument("--num_classes", type=int, default=3, help="Num of classes for classification")
+    parser.add_argument("--dropout", type=int, default=0.1, help="Rate of dropout")
+    parser.add_argument("--smoothing", type=int, default=0.0, help="Rate of label smoothing")
     args = parser.parse_args()
     acc_steps = args.acc_batch_size // args.batch_size
 
@@ -46,8 +50,14 @@ def train():
 
     tokenizer = RobertaTokenizer.from_pretrained(args.model_checkpoint)
     transformer = RobertaModel.from_pretrained(args.model_checkpoint, mirror='tuna')
-    model = AspectClassifier(transformer)
+    model = AspectClassifier(transformer, dropout=args.dropout)
     model = model.to(args.device)
+
+    train_dataset = SemDataset(tokenizer, args.dataset_path, 'train')
+    dev_dataset = SemDataset(tokenizer, args.dataset_path, 'dev')
+    train_dataloader = DataLoader(train_dataset, args.batch_size, shuffle=True, collate_fn=collate_batch)
+    dev_dataloader = DataLoader(dev_dataset, args.batch_size, shuffle=False, collate_fn=collate_batch)
+    steps_per_epoch = len(train_dataloader)
 
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
@@ -66,17 +76,12 @@ def train():
             "weight_decay": 0.0,
         },
     ]
-    # TODO warmup
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr)
-    # TODO param
-    # criterion = LabelSmoothingLoss(args.num_classes)
-    criterion = CrossEntropyLoss()
-
-    train_dataset = SemDataset(tokenizer, args.dataset_path, 'train')
-    dev_dataset = SemDataset(tokenizer, args.dataset_path, 'dev')
-    train_dataloader = DataLoader(train_dataset, args.batch_size, shuffle=True, collate_fn=collate_batch)
-    dev_dataloader = DataLoader(dev_dataset, args.batch_size, shuffle=False, collate_fn=collate_batch)
-    steps_per_epoch = len(train_dataloader)
+    warmup_steps = int(args.n_epochs * steps_per_epoch * args.warmup_rate)
+    linear_lambda = lambda epoch: (0.9 * epoch / warmup_steps + 0.1) if epoch < warmup_steps else 1
+    scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=linear_lambda)
+    criterion = LabelSmoothingLoss(args.num_classes, smoothing=args.smoothing)
+    # criterion = CrossEntropyLoss()
 
     train_loss = []
     for epoch in range(args.n_epochs):
@@ -93,6 +98,7 @@ def train():
             global_steps = epoch*steps_per_epoch + step + 1
             if global_steps % acc_steps == 0:
                 optimizer.step()
+                scheduler.step(global_steps)
                 optimizer.zero_grad()
                 train_loss_mean = sum(train_loss) / len(train_loss)
                 writer_train.add_scalar('loss', train_loss_mean, global_steps)
@@ -105,6 +111,7 @@ def train():
                     total = 0
                     correct = 0
                     dev_loss = 0.0
+                    tps, fps, fns = [0 for _ in range(args.num_classes)], [0 for _ in range(args.num_classes)], [0 for _ in range(args.num_classes)]
                     for batch in tqdm(dev_dataloader, position=0):
                         batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
                         input_ids, asp_masks, labels = batch
@@ -115,10 +122,22 @@ def train():
                         _, pred = torch.max(output, dim=1)
                         total += labels.size(0)
                         correct += (pred == labels).sum().item()
+                        for idx in range(args.num_classes):
+                            tps[idx] += torch.sum((pred == idx).long().masked_fill(labels != idx, 0)).item()
+                            fps[idx] += torch.sum((pred == idx).long().masked_fill(labels == idx, 0)).item()
+                            fns[idx] += torch.sum((pred != idx).long().masked_fill(labels != idx, 0)).item()
                     dev_loss /= len(dev_dataloader)
                     writer_dev.add_scalar('loss', dev_loss, global_steps)
-                    # TODO f1 score
+                    f_sum, pre_sum, rec_sum = 0.0, 0.0, 0.0
+                    for idx in range(args.num_classes):
+                        f, pre, rec = compute_f_score(tps[idx], fns[idx], fps[idx])
+                        f_sum += f
+                        pre_sum += pre
+                        rec_sum += rec
                     writer_dev.add_scalar('acc', correct / total, global_steps)
+                    writer_dev.add_scalar('f1', f_sum / args.num_classes, global_steps)
+                    writer_dev.add_scalar('pre', pre_sum / args.num_classes, global_steps)
+                    writer_dev.add_scalar('rec', rec_sum / args.num_classes, global_steps)
 
 if __name__ == '__main__':
     train()
