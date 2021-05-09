@@ -1,6 +1,7 @@
 # for project
 .vscode
 .idea
+logs
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

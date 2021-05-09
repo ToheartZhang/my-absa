@@ -18,6 +18,7 @@ def transform_asp(raw_path, out_path):
         root = parser.getroot()
         for sentence in root.iter('sentence'):
             text = sentence.find('text').text
+            text_list = text.split(' ')
             aspects = sentence.find('aspectTerms')
             if aspects is None:
                 continue
@@ -26,11 +27,15 @@ def transform_asp(raw_path, out_path):
                 polar = aspect.get('polarity')
                 if polar == 'conflict':
                     continue
-                start = int(aspect.get('from'))
-                end = int(aspect.get('to'))
+                char_start = int(aspect.get('from'))
+                # char_end = int(aspect.get('to'))
+                term_list = term.split(' ')
+                left_text = text[:char_start]
+                start = len(left_text.strip().split(' '))
+                end = start + len(term_list)
                 print(term, polar, start, end)
                 sample = {
-                    'text': text,
+                    'text': text_list,
                     'aspect': [term, label_dict[polar], start, end]
                 }
                 f.write(json.dumps(sample) + '\n')

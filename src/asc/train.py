@@ -9,9 +9,10 @@ from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from transformers import BertTokenizer, BertModel
-from .model import AspectClassifier
-from .data import SemDataset, collate_batch
+from transformers import RobertaTokenizer, RobertaModel
+from asc.model import AspectClassifier
+from asc.data import SemDataset, collate_batch
+from asc.optimizer import LabelSmoothingLoss
 from cfg import *
 
 def train():
@@ -19,33 +20,34 @@ def train():
     parser.add_argument("--dataset_path", type=str, default=DATA_PATH,
                         help="Path or url of the dataset. If empty download from S3.")
     # parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
-    parser.add_argument("--model_checkpoint", type=str, default=MODEL_PATH,
+    parser.add_argument("--model_checkpoint", type=str, default='roberta-base',
                         help="Path, url or short name of the model")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size for training")
-    # TODO change with batch_size
-    parser.add_argument("--acc_steps", type=int, default=8,
+    parser.add_argument("--acc_batch_size", type=int, default=32,
                         help="Accumulate gradients on several steps")
     parser.add_argument("--lr", type=float, default=2e-5, help="Learning rate")
-    parser.add_argument("--n_epochs", type=int, default=1, help="Number of training epochs")
+    parser.add_argument("--n_epochs", type=int, default=20, help="Number of training epochs")
     parser.add_argument("--eval_before_start", action='store_true',
                         help="If true start with a first evaluation before training")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")
     parser.add_argument("--warmup_steps", type=int, default=2000, help="Warm up steps")
     parser.add_argument("--valid_steps", type=int, default=2000, help="Perfom validation every X steps")
-    # parser.add_argument("--n_emd", type=int, default=768, help="Number of n_emd in config file (for noam)")
-    # parser.add_argument("--from_step", type=int, default=-1, help="Init learning rate from this step")
+    parser.add_argument("--num_classes", type=int, default=3, help="Num of classes for classification")
     args = parser.parse_args()
+    acc_steps = args.acc_batch_size // args.batch_size
 
+    log_mark = f'{args.batch_size}_{args.lr}'
     log_dir_base = 'logs/asc_{}_{}'.format(time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime(time.time())), log_mark)
     log_dir_train = log_dir_base + '_train'
     log_dir_dev = log_dir_base + '_dev'
     writer_train = SummaryWriter(os.path.join(MAIN_PATH, log_dir_train), flush_secs=5)
     writer_dev = SummaryWriter(os.path.join(MAIN_PATH, log_dir_dev), flush_secs=5)
 
-    tokenizer = BertTokenizer.from_pretrained(args.model_checkpoint)
-    transformer = BertModel.from_pretrained(args.model_checkpoint)
+    tokenizer = RobertaTokenizer.from_pretrained(args.model_checkpoint)
+    transformer = RobertaModel.from_pretrained(args.model_checkpoint, mirror='tuna')
     model = AspectClassifier(transformer)
+    model = model.to(args.device)
 
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
@@ -67,6 +69,7 @@ def train():
     # TODO warmup
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr)
     # TODO param
+    # criterion = LabelSmoothingLoss(args.num_classes)
     criterion = CrossEntropyLoss()
 
     train_dataset = SemDataset(tokenizer, args.dataset_path, 'train')
@@ -82,20 +85,19 @@ def train():
             batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
             input_ids, asp_masks, labels = batch
             output = model(input_ids, asp_masks)
-            # TODO label smoothing
             loss = criterion(output, labels)
-            loss = loss.mean() / args.acc_steps
+            loss = loss.mean() / acc_steps
             loss.backward()
             train_loss.append(loss.item())
 
             global_steps = epoch*steps_per_epoch + step + 1
-            if global_steps % args.acc_steps == 0:
+            if global_steps % acc_steps == 0:
                 optimizer.step()
                 optimizer.zero_grad()
                 train_loss_mean = sum(train_loss) / len(train_loss)
                 writer_train.add_scalar('loss', train_loss_mean, global_steps)
                 train_loss.clear()
-                if global_steps % (args.acc_steps * 6) == 0:
+                if global_steps % (acc_steps * 6) == 0:
                     print(f'  epoch {epoch}, step {step + 1}/{steps_per_epoch} loss: ', train_loss_mean)
             if global_steps % args.valid_steps == 1:
                 model.eval()
@@ -108,8 +110,7 @@ def train():
                         input_ids, asp_masks, labels = batch
                         output = model(input_ids, asp_masks)
                         loss = criterion(output, labels)
-                        loss = loss.mean() / args.acc_steps
-                        loss.backward()
+                        loss = loss.mean() / acc_steps
                         dev_loss += loss.item()
                         _, pred = torch.max(output, dim=1)
                         total += labels.size(0)
@@ -118,3 +119,6 @@ def train():
                     writer_dev.add_scalar('loss', dev_loss, global_steps)
                     # TODO f1 score
                     writer_dev.add_scalar('acc', correct / total, global_steps)
+
+if __name__ == '__main__':
+    train()
