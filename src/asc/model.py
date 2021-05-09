@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from transformers import BertModel
 
 class AspectClassifier(nn.Module):
-    def __init__(self, embed, dropout=0.5, num_classes=3, pool="max"):
+    def __init__(self, embed=None, dropout=0.5, num_classes=3, pool="max"):
         super().__init__()
         assert pool in ("max", "mean")
         self.embed = embed

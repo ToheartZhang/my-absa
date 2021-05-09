@@ -56,12 +56,12 @@ def collate_batch(batch):
     return batch_token_ids, batch_asp_masks, torch.tensor(batch_labels)
 
 class SemDataset(Dataset):
-    def __init__(self, tokenizer, data_dir, data_type):
+    def __init__(self, tokenizer, data_dir, data_name, data_type):
         super(Dataset, self).__init__()
         cls = tokenizer.cls_token
         sep = tokenizer.sep_token
-        data_path = os.path.join(data_dir, f'{data_type}.json')
-        cache_path = os.path.join(data_dir, f'{data_type}_cache.pkl')
+        data_path = os.path.join(data_dir, data_name, f'{data_type}.json')
+        cache_path = os.path.join(data_dir, data_name, f'{data_type}_cache.pkl')
         if os.path.isfile(cache_path):
             print(f'load dataset from {cache_path}')
             self.data = load_pkl(cache_path)

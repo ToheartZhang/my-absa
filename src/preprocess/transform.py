@@ -4,7 +4,7 @@ import json
 import xml.etree.ElementTree as et
 from cfg import *
 
-random.seed(42)
+random.seed(41)
 
 label_dict = {
     'neutral': 0,
@@ -12,13 +12,27 @@ label_dict = {
     'negative': 2
 }
 
-def transform_asp(raw_path, out_path):
+def get_test_id(test_path):
+    test_ids = set()
+    parser = et.parse(test_path)
+    root = parser.getroot()
+    for sentence in root.iter('sentence'):
+        test_ids.add(sentence.get('id'))
+    return test_ids
+
+
+def transform_asp(raw_path, out_path, test_path=None):
     parser = et.parse(raw_path)
+    banned_ids = get_test_id(test_path) if test_path is not None else None
     with open(out_path, 'w', encoding='utf-8') as f:
         root = parser.getroot()
         for sentence in root.iter('sentence'):
+            id = sentence.get('id')
+            if (banned_ids is not None) and (id in banned_ids):
+                continue
             text = sentence.find('text').text
-            text_list = text.split(' ')
+            text = text.replace('\u00a0', '')
+            text_list = text.split()
             aspects = sentence.find('aspectTerms')
             if aspects is None:
                 continue
@@ -28,10 +42,9 @@ def transform_asp(raw_path, out_path):
                 if polar == 'conflict':
                     continue
                 char_start = int(aspect.get('from'))
-                # char_end = int(aspect.get('to'))
-                term_list = term.split(' ')
+                term_list = term.split()
                 left_text = text[:char_start]
-                start = len(left_text.strip().split(' '))
+                start = len(left_text.strip().split()) if len(left_text) > 0 else 0
                 end = start + len(term_list)
                 print(term, polar, start, end)
                 sample = {
@@ -52,8 +65,14 @@ def split(data_path, train_path, dev_path, percent=0.2):
             else:
                 train_f.write(line)
 
+def get_json_data(dataset_name):
+    transform_asp(os.path.join(DATA_PATH, dataset_name, 'train.xml'), os.path.join(DATA_PATH, dataset_name, 'data.json'),
+                  os.path.join(DATA_PATH, dataset_name, 'dev.xml'))
+    split(os.path.join(DATA_PATH, dataset_name, 'data.json'), os.path.join(DATA_PATH, dataset_name, 'train.json'),
+          os.path.join(DATA_PATH, dataset_name, 'dev.json'))
+    transform_asp(os.path.join(DATA_PATH, dataset_name, 'dev.xml'), os.path.join(DATA_PATH, dataset_name, 'test.json'), None)
+
 if __name__ == '__main__':
-    # transform_asp(os.path.join(DATA_PATH, 'train.xml'), os.path.join(DATA_PATH, 'data.json'))
-    # transform_asp(os.path.join(DATA_PATH, 'dev.xml'), os.path.join(DATA_PATH, 'dev.json'))
-    transform_asp(os.path.join(DATA_PATH, 'test.xml'), os.path.join(DATA_PATH, 'test.json'))
-    # split(os.path.join(DATA_PATH, 'data.json'), os.path.join(DATA_PATH, 'train.json'), os.path.join(DATA_PATH, 'dev.json'))
+    get_json_data('restaurant')
+    get_json_data('laptop')
+

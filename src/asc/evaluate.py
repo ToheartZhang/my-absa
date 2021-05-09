@@ -22,8 +22,10 @@ def evaluate():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default=DATA_PATH,
                         help="Path or url of the dataset. If empty download from S3.")
+    parser.add_argument("--dataset_name", type=str, default='laptop',
+                        help="Dataset name.", choices=['restaurant', 'laptop'])
     # parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
-    parser.add_argument("--model_checkpoint", type=str, default='roberta-base',
+    parser.add_argument("--model_checkpoint", type=str, default=MODEL_PATH,
                         help="Path, url or short name of the model")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
@@ -34,12 +36,14 @@ def evaluate():
     args = parser.parse_args()
 
     tokenizer = RobertaTokenizer.from_pretrained(args.model_checkpoint)
-    transformer = RobertaModel.from_pretrained(args.model_checkpoint, mirror='tuna')
+    transformer = RobertaModel.from_pretrained('roberta-base', mirror='tuna')
     model = AspectClassifier(transformer, dropout=args.dropout)
+    model.load_state_dict(torch.load(os.path.join(MODEL_PATH, args.dataset_name + '_asc', '2021-05-09_22-41-19_0.823110779280058.pt')))
+    # model.load_state_dict(torch.load(os.path.join(MODEL_PATH, args.dataset_name + '_asc', '2021-05-09_23-00-20_0.7798739261789357.pt')))
     model = model.to(args.device)
 
-    test_dataset = SemDataset(tokenizer, args.dataset_path, 'test')
-    test_dataloader = DataLoader(test_dataset, args.batch_size, shuffle=True, collate_fn=collate_batch)
+    test_dataset = SemDataset(tokenizer, args.dataset_path, args.dataset_name, 'test')
+    test_dataloader = DataLoader(test_dataset, args.batch_size, shuffle=False, collate_fn=collate_batch)
 
     model.eval()
     with torch.no_grad():
@@ -68,5 +72,14 @@ def evaluate():
         pre = pre_sum / args.num_classes
         rec = rec_sum / args.num_classes
         print(f'f1: {f_score}\tprecision: {pre}\trecall: {rec}\tacc: {correct/total}')
+
 if __name__ == '__main__':
     evaluate()
+
+"""
+2021-05-09_23-00-20_0.7798739261789357.pt
+f1: 0.8135673667588045	precision: 0.9375150204277715	recall: 0.7765795206971643	acc: 0.9166666666666666
+
+2021-05-09_22-41-19_0.823110779280058.pt
+f1: 0.8783068783068181	precision: 0.9509803921568479	recall: 0.8333333333333245	acc: 0.8979591836734694
+"""

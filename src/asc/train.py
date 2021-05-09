@@ -1,5 +1,6 @@
 import os
 import sys
+import shutil
 import time
 import math
 from argparse import ArgumentParser
@@ -11,7 +12,7 @@ from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from transformers import RobertaTokenizer, RobertaModel
+from transformers import RobertaTokenizer, RobertaModel, WEIGHTS_NAME
 from asc.model import AspectClassifier
 from asc.data import SemDataset, collate_batch
 from asc.optimizer import LabelSmoothingLoss
@@ -22,6 +23,8 @@ def train():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default=DATA_PATH,
                         help="Path or url of the dataset. If empty download from S3.")
+    parser.add_argument("--dataset_name", type=str, default='restaurant',
+                        help="Dataset name.", choices=['restaurant', 'laptop'])
     # parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
     parser.add_argument("--model_checkpoint", type=str, default='roberta-base',
                         help="Path, url or short name of the model")
@@ -37,25 +40,26 @@ def train():
     parser.add_argument("--warmup_rate", type=int, default=0.01, help="Warm up steps")
     parser.add_argument("--valid_steps", type=int, default=50, help="Perfom validation every X steps")
     parser.add_argument("--num_classes", type=int, default=3, help="Num of classes for classification")
-    parser.add_argument("--dropout", type=int, default=0.1, help="Rate of dropout")
-    parser.add_argument("--smoothing", type=int, default=0.1, help="Rate of label smoothing")
+    parser.add_argument("--dropout", type=int, default=0.5, help="Rate of dropout")
+    parser.add_argument("--smoothing", type=int, default=0.0, help="Rate of label smoothing")
     args = parser.parse_args()
     acc_steps = args.acc_batch_size // args.batch_size
 
     log_mark = f'{args.batch_size}_{args.lr}'
-    log_dir_base = 'logs/asc_{}_{}'.format(time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime(time.time())), log_mark)
+    log_dir_base = 'logs/asc_{}_{}_{}'.format(args.dataset_name, time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime(time.time())), log_mark)
     log_dir_train = log_dir_base + '_train'
     log_dir_dev = log_dir_base + '_dev'
     writer_train = SummaryWriter(os.path.join(MAIN_PATH, log_dir_train), flush_secs=5)
     writer_dev = SummaryWriter(os.path.join(MAIN_PATH, log_dir_dev), flush_secs=5)
 
     tokenizer = RobertaTokenizer.from_pretrained(args.model_checkpoint)
+    tokenizer.save_pretrained(MODEL_PATH)
     transformer = RobertaModel.from_pretrained(args.model_checkpoint, mirror='tuna')
     model = AspectClassifier(transformer, dropout=args.dropout)
     model = model.to(args.device)
 
-    train_dataset = SemDataset(tokenizer, args.dataset_path, 'train')
-    dev_dataset = SemDataset(tokenizer, args.dataset_path, 'dev')
+    train_dataset = SemDataset(tokenizer, args.dataset_path, args.dataset_name, 'train')
+    dev_dataset = SemDataset(tokenizer, args.dataset_path, args.dataset_name, 'dev')
     train_dataloader = DataLoader(train_dataset, args.batch_size, shuffle=True, collate_fn=collate_batch)
     dev_dataloader = DataLoader(dev_dataset, args.batch_size, shuffle=False, collate_fn=collate_batch)
     steps_per_epoch = len(train_dataloader)
@@ -81,7 +85,8 @@ def train():
     warmup_steps = int(args.n_epochs * steps_per_epoch * args.warmup_rate)
     linear_lambda = lambda epoch: (0.9 * epoch / warmup_steps + 0.1) if epoch < warmup_steps else 1
     scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=linear_lambda)
-    criterion = LabelSmoothingLoss(args.num_classes, smoothing=args.smoothing)
+    # criterion = LabelSmoothingLoss(args.num_classes, smoothing=args.smoothing)
+    criterion = CrossEntropyLoss()
 
     train_loss = []
     best_f_score = 0.0
@@ -93,6 +98,8 @@ def train():
             output = model(input_ids, asp_masks)
             loss = criterion(output, labels)
             loss = loss.mean() / acc_steps
+            if loss.item() > 10:
+                print('===========================')
             loss.backward()
             train_loss.append(loss.item())
 
@@ -142,7 +149,7 @@ def train():
                     writer_dev.add_scalar('rec', rec_sum / args.num_classes, global_steps)
                     if f_score > best_f_score:
                         best_f_score = f_score
-                        save_model(model, score=best_f_score)
+                        save_model(model, path_prefix=f'{args.dataset_name}_asc', score=best_f_score)
 
 if __name__ == '__main__':
     train()
