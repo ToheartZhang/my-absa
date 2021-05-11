@@ -21,7 +21,7 @@ MODEL_CLASS = {
     'roberta': (RobertaForTokenClassification, RobertaTokenizer, RobertaConfig)
 }
 
-def train():
+def evalute():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default=DATA_PATH,
                         help="Path or url of the dataset. If empty download from S3.")
@@ -91,4 +91,4 @@ def train():
                 print("preds_list: %s " % str(preds_list[i]))
 
 if __name__ == '__main__':
-    train()
+    evalute()

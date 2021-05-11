@@ -30,6 +30,7 @@ def transform_asp(raw_path, out_path):
             text = text.replace('\u00a0', '')
             text_list = text.split()
             aspects = sentence.find('aspectTerms')
+            # TODO remove below
             if aspects is None:
                 continue
             for aspect in aspects.iter('aspectTerm'):

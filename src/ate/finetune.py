@@ -20,7 +20,7 @@ MODEL_CLASS = {
     'roberta': (RobertaForTokenClassification, RobertaTokenizer, RobertaConfig)
 }
 
-def evaluate():
+def train():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default=DATA_PATH,
                         help="Path or url of the dataset. If empty download from S3.")
@@ -135,4 +135,4 @@ def evaluate():
                         save_model(model, path_prefix=f'{args.dataset_name}_ate', score=best_dev_loss)
 
 if __name__ == '__main__':
-    evaluate()
+    train()

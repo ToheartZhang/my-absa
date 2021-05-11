@@ -163,6 +163,5 @@ def train():
                         best_f_score = f_score
                         save_model(model, path_prefix=f'{args.dataset_name}_asc', score=best_f_score)
 
-
 if __name__ == '__main__':
     train()
