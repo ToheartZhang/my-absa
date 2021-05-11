@@ -15,6 +15,23 @@ def load_pkl(path):
     with open(path, 'rb') as f:
         return pickle.load(f)
 
+def collate_batch(batch):
+    batch_token_ids = []
+    batch_attn_masks = []
+    batch_token_type_ids = []
+    batch_labels = []
+    for sample in batch:
+        token_ids, attn_mask, token_type_ids, label = sample
+        batch_token_ids.append(token_ids)
+        batch_attn_masks.append(attn_mask)
+        batch_token_type_ids.append(token_type_ids)
+        batch_labels.append(label)
+
+    return torch.tensor(batch_token_ids, dtype=torch.long), \
+           torch.tensor(batch_attn_masks, dtype=torch.long), \
+           torch.tensor(batch_token_type_ids, dtype=torch.long), \
+           torch.tensor(batch_labels, dtype=torch.long)
+
 class SemAEDataset(Dataset):
     def __init__(self, tokenizer, data_dir, data_name, data_type, ignore_index=-100, max_seq_len=128):
         super(Dataset, self).__init__()
@@ -33,21 +50,19 @@ class SemAEDataset(Dataset):
             print(f'construct dataset from {data_path}')
             self.data = []
             with open(data_path, 'r', encoding='utf-8') as f:
-                for idx, line in enumerate(tqdm(f.readlines())):
-                    line = line.strip()
-                    line = json.loads(line)
-
+                data_json = json.load(f)
+                for idx, (key, value) in enumerate(tqdm(data_json.items())):
                     tokens = []
                     label_ids = []
-                    text = line['sentence']
-                    labels = line['label']
+                    text = value['sentence']
+                    labels = value['label']
                     for word, label in zip(text, labels):
                         word_tokens = tokenizer.tokenize(word)
                         tokens.extend(word_tokens)
-                        label_ids.extend([label_dict[label]] + [ignore_index]*(len(word_tokens - 1)))
-                    # TODO max_seq_len
-                    tokens = [tokenizer.tokenize(cls)] + tokens + [tokenizer.tokenize(sep)]
-                    label_ids = [ignore_index] + tokens + [ignore_index]
+                        label_ids.extend([label_dict[label]] + [ignore_index]*(len(word_tokens) - 1))
+
+                    tokens = tokenizer.tokenize(cls) + tokens + tokenizer.tokenize(sep)
+                    label_ids = [ignore_index] + label_ids + [ignore_index]
                     token_type_ids = [0] * len(tokens)
                     input_ids = tokenizer.convert_tokens_to_ids(tokens)
                     input_mask = [1]*len(input_ids)
@@ -63,15 +78,20 @@ class SemAEDataset(Dataset):
                     assert len(token_type_ids) == max_seq_len
                     assert len(input_mask) == max_seq_len
 
+                    input_ids = torch.tensor(input_ids, dtype=torch.long)
+                    attention_mask = torch.tensor(input_mask, dtype=torch.long)
+                    token_type_ids = torch.tensor(token_type_ids, dtype=torch.long)
+                    label = torch.tensor(label_ids, dtype=torch.long)
+
                     if idx < 5:
                         print("*** Example ***")
-                        print("tokens: %s", " ".join([str(x) for x in tokens]))
-                        print("input_ids: %s", " ".join([str(x) for x in input_ids]))
-                        print("input_mask: %s", " ".join([str(x) for x in input_mask]))
-                        print("segment_ids: %s", " ".join([str(x) for x in token_type_ids]))
-                        print("label_ids: %s", " ".join([str(x) for x in label_ids]))
+                        print("tokens:", " ".join([str(x) for x in tokens]))
+                        print("input_ids:", " ".join([str(x) for x in input_ids]))
+                        print("input_mask:", " ".join([str(x) for x in input_mask]))
+                        print("segment_ids:", " ".join([str(x) for x in token_type_ids]))
+                        print("label_ids:", " ".join([str(x) for x in label_ids]))
 
-                    self.data.append((input_ids, input_mask, token_type_ids, label_ids))
+                    self.data.append((input_ids, attention_mask, token_type_ids, label))
             save_pkl(self.data, cache_path)
 
     def __len__(self):

@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from transformers import RobertaTokenizer, RobertaForTokenClassification, RobertaConfig, WEIGHTS_NAME
 from transformers import AdamW, get_linear_schedule_with_warmup
-from ate.data import SemAEDataset
+from ate.data import SemAEDataset, collate_batch
 from cfg import *
 from utils import compute_f_score, save_model
 
@@ -20,7 +20,7 @@ MODEL_CLASS = {
     'roberta': (RobertaForTokenClassification, RobertaTokenizer, RobertaConfig)
 }
 
-def train():
+def evaluate():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default=DATA_PATH,
                         help="Path or url of the dataset. If empty download from S3.")
@@ -38,12 +38,14 @@ def train():
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")
     parser.add_argument("--warmup_steps", type=int, default=0, help="Warm up steps")
+    parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--max_grad_norm", type=float, default=1.0)
     parser.add_argument("--do_lower_case", type=bool, default=True)
+    parser.add_argument("--valid_steps", type=int, default=50, help="Perfom validation every X steps")
     args = parser.parse_args()
 
-    log_mark = f'{args.batch_size}_{args.lr}_{args.dropout}_{args.smoothing}'
-    log_dir_base = 'logs/ae_{}_{}_{}'.format(args.dataset_name, time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime(time.time())), log_mark)
+    log_mark = f'{args.batch_size}_{args.lr}'
+    log_dir_base = 'logs/ate_{}_{}_{}'.format(args.dataset_name, time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime(time.time())), log_mark)
     log_dir_train = log_dir_base + '_train'
     log_dir_dev = log_dir_base + '_dev'
     writer_train = SummaryWriter(os.path.join(MAIN_PATH, log_dir_train), flush_secs=5)
@@ -58,9 +60,10 @@ def train():
 
     train_dataset = SemAEDataset(tokenizer, args.dataset_path, args.dataset_name, 'train')
     dev_dataset = SemAEDataset(tokenizer, args.dataset_path, args.dataset_name, 'dev')
-    train_dataloader = DataLoader(train_dataset, args.batch_size, shuffle=True)
-    dev_dataloader = DataLoader(dev_dataset, args.batch_size, shuffle=False)
+    train_dataloader = DataLoader(train_dataset, args.batch_size, shuffle=True, collate_fn=collate_batch)
+    dev_dataloader = DataLoader(dev_dataset, args.batch_size, shuffle=False, collate_fn=collate_batch)
     steps_per_epoch = len(train_dataloader)
+    total_steps = steps_per_epoch*args.n_epochs
 
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
@@ -80,7 +83,7 @@ def train():
         },
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr)
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps)
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=total_steps)
 
     train_loss = []
     best_dev_loss = float('inf')
@@ -132,4 +135,4 @@ def train():
                         save_model(model, path_prefix=f'{args.dataset_name}_ate', score=best_dev_loss)
 
 if __name__ == '__main__':
-    train()
+    evaluate()
