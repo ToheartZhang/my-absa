@@ -21,15 +21,11 @@ def get_test_id(test_path):
     return test_ids
 
 
-def transform_asp(raw_path, out_path, test_path=None):
+def transform_asp(raw_path, out_path):
     parser = et.parse(raw_path)
-    banned_ids = get_test_id(test_path) if test_path is not None else None
     with open(out_path, 'w', encoding='utf-8') as f:
         root = parser.getroot()
         for sentence in root.iter('sentence'):
-            id = sentence.get('id')
-            if (banned_ids is not None) and (id in banned_ids):
-                continue
             text = sentence.find('text').text
             text = text.replace('\u00a0', '')
             text_list = text.split()
@@ -66,11 +62,10 @@ def split(data_path, train_path, dev_path, percent=0.2):
                 train_f.write(line)
 
 def get_json_data(dataset_name):
-    transform_asp(os.path.join(DATA_PATH, dataset_name, 'train.xml'), os.path.join(DATA_PATH, dataset_name, 'data.json'),
-                  os.path.join(DATA_PATH, dataset_name, 'dev.xml'))
+    transform_asp(os.path.join(DATA_PATH, dataset_name, 'train.xml'), os.path.join(DATA_PATH, dataset_name, 'data.json'))
     split(os.path.join(DATA_PATH, dataset_name, 'data.json'), os.path.join(DATA_PATH, dataset_name, 'train.json'),
           os.path.join(DATA_PATH, dataset_name, 'dev.json'))
-    transform_asp(os.path.join(DATA_PATH, dataset_name, 'dev.xml'), os.path.join(DATA_PATH, dataset_name, 'test.json'), None)
+    transform_asp(os.path.join(DATA_PATH, dataset_name, 'test.xml'), os.path.join(DATA_PATH, dataset_name, 'test.json'))
 
 if __name__ == '__main__':
     get_json_data('restaurant')

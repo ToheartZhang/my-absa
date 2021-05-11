@@ -14,7 +14,7 @@ from torch.utils.tensorboard import SummaryWriter
 from transformers import RobertaTokenizer, RobertaModel
 from asc.model import AspectClassifier
 from asc.data import SemDataset, collate_batch
-from asc.optimizer import LabelSmoothingLoss
+from asc.criterion import LabelSmoothingLoss
 from cfg import *
 from utils import compute_f_score, save_model
 
@@ -22,7 +22,7 @@ def evaluate():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default=DATA_PATH,
                         help="Path or url of the dataset. If empty download from S3.")
-    parser.add_argument("--dataset_name", type=str, default='laptop',
+    parser.add_argument("--dataset_name", type=str, default='restaurant',
                         help="Dataset name.", choices=['restaurant', 'laptop'])
     # parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
     parser.add_argument("--model_checkpoint", type=str, default=MODEL_PATH,
@@ -32,13 +32,12 @@ def evaluate():
                         help="Device (cuda or cpu)")
     parser.add_argument("--num_classes", type=int, default=3, help="Num of classes for classification")
     parser.add_argument("--dropout", type=int, default=0.1, help="Rate of dropout")
-    parser.add_argument("--smoothing", type=int, default=0.0, help="Rate of label smoothing")
     args = parser.parse_args()
 
     tokenizer = RobertaTokenizer.from_pretrained(args.model_checkpoint)
-    transformer = RobertaModel.from_pretrained('roberta-base', mirror='tuna')
+    transformer = RobertaModel.from_pretrained('roberta-large', mirror='tuna')
     model = AspectClassifier(transformer, dropout=args.dropout)
-    model.load_state_dict(torch.load(os.path.join(MODEL_PATH, args.dataset_name + '_asc', '2021-05-09_22-41-19_0.823110779280058.pt')))
+    model.load_state_dict(torch.load(os.path.join(MODEL_PATH, args.dataset_name + '_asc', '2021-05-11_16-12-58_0.8480032285070821.pt')))
     # model.load_state_dict(torch.load(os.path.join(MODEL_PATH, args.dataset_name + '_asc', '2021-05-09_23-00-20_0.7798739261789357.pt')))
     model = model.to(args.device)
 
@@ -77,9 +76,15 @@ if __name__ == '__main__':
     evaluate()
 
 """
-2021-05-09_23-00-20_0.7798739261789357.pt
-f1: 0.8135673667588045	precision: 0.9375150204277715	recall: 0.7765795206971643	acc: 0.9166666666666666
+restaurant roberta 2021-05-10_17-40-37_0.800588572778863.pt
+f1: 0.776287003497838	precision: 0.8049256739732926	recall: 0.757326007326007	acc: 0.8491071428571428
 
-2021-05-09_22-41-19_0.823110779280058.pt
-f1: 0.8783068783068181	precision: 0.9509803921568479	recall: 0.8333333333333245	acc: 0.8979591836734694
+restaurant robert-large 2021-05-11_16-12-58_0.8480032285070821.pt
+f1: 0.7993358497922273	precision: 0.8457562565338215	recall: 0.7821166928309783	acc: 0.8732142857142857
+
+laptop roberta 2021-05-09_22-41-19_0.823110779280058.pt
+f1: 0.7577339596879217	precision: 0.7579559434153684	recall: 0.7740195727556144	acc: 0.7946708463949843
+
+laptop roberta-large 2021-05-11_14-50-15_0.8342186341060799.pt
+f1: 0.7811823203468569	precision: 0.7806972737407515	recall: 0.7881199587736494	acc: 0.8119122257053292
 """

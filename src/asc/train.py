@@ -12,12 +12,13 @@ from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from transformers import RobertaTokenizer, RobertaModel, WEIGHTS_NAME
+from transformers import RobertaTokenizer, RobertaModel, XLMRobertaTokenizer, XLMRobertaModel, WEIGHTS_NAME
 from asc.model import AspectClassifier
 from asc.data import SemDataset, collate_batch
-from asc.optimizer import LabelSmoothingLoss
+from asc.criterion import LabelSmoothingLoss
 from cfg import *
 from utils import compute_f_score, save_model
+
 
 def train():
     parser = ArgumentParser()
@@ -25,8 +26,11 @@ def train():
                         help="Path or url of the dataset. If empty download from S3.")
     parser.add_argument("--dataset_name", type=str, default='restaurant',
                         help="Dataset name.", choices=['restaurant', 'laptop'])
+    parser.add_argument("--model_name", type=str, default='roberta',
+                        help="Dataset name.", choices=['xlm', 'roberta'])
     # parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
-    parser.add_argument("--model_checkpoint", type=str, default='roberta-base',
+    parser.add_argument("--model_checkpoint", type=str, default='roberta-large',
+                        choices=['roberta-base', 'xlm-roberta-base', 'roberta-large'],
                         help="Path, url or short name of the model")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training")
     parser.add_argument("--acc_batch_size", type=int, default=32,
@@ -37,24 +41,27 @@ def train():
                         help="If true start with a first evaluation before training")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")
-    parser.add_argument("--warmup_rate", type=int, default=0.01, help="Warm up steps")
+    parser.add_argument("--warmup_rate", type=float, default=0.01, help="Warm up steps")
     parser.add_argument("--valid_steps", type=int, default=50, help="Perfom validation every X steps")
     parser.add_argument("--num_classes", type=int, default=3, help="Num of classes for classification")
-    parser.add_argument("--dropout", type=int, default=0.5, help="Rate of dropout")
-    parser.add_argument("--smoothing", type=int, default=0.0, help="Rate of label smoothing")
+    parser.add_argument("--dropout", type=float, default=0.5, help="Rate of dropout")
+    parser.add_argument("--smoothing", type=float, default=0.0, help="Rate of label smoothing")
     args = parser.parse_args()
     acc_steps = args.acc_batch_size // args.batch_size
 
-    log_mark = f'{args.batch_size}_{args.lr}'
-    log_dir_base = 'logs/asc_{}_{}_{}'.format(args.dataset_name, time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime(time.time())), log_mark)
+    log_mark = f'{args.model_name}_{args.batch_size}_{args.lr}_{args.dropout}_{args.smoothing}'
+    log_dir_base = 'logs/asc_{}_{}_{}'.format(args.dataset_name,
+                                              time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime(time.time())), log_mark)
     log_dir_train = log_dir_base + '_train'
     log_dir_dev = log_dir_base + '_dev'
     writer_train = SummaryWriter(os.path.join(MAIN_PATH, log_dir_train), flush_secs=5)
     writer_dev = SummaryWriter(os.path.join(MAIN_PATH, log_dir_dev), flush_secs=5)
 
-    tokenizer = RobertaTokenizer.from_pretrained(args.model_checkpoint)
+    tokenizer_class = RobertaTokenizer if args.model_name == 'roberta' else XLMRobertaTokenizer
+    transformer_class = RobertaModel if args.model_name == 'roberta' else XLMRobertaModel
+    tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint)
     tokenizer.save_pretrained(MODEL_PATH)
-    transformer = RobertaModel.from_pretrained(args.model_checkpoint, mirror='tuna')
+    transformer = transformer_class.from_pretrained(args.model_checkpoint, mirror='tuna')
     model = AspectClassifier(transformer, dropout=args.dropout)
     model = model.to(args.device)
 
@@ -82,11 +89,13 @@ def train():
         },
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr)
-    warmup_steps = int(args.n_epochs * steps_per_epoch * args.warmup_rate)
-    linear_lambda = lambda epoch: (0.9 * epoch / warmup_steps + 0.1) if epoch < warmup_steps else 1
+    total_steps = args.n_epochs * steps_per_epoch
+    warmup_steps = int(total_steps * args.warmup_rate)
+    linear_lambda = lambda epoch: epoch / warmup_steps if epoch < warmup_steps else max(
+        (epoch - total_steps) / (warmup_steps - total_steps), 0)
     scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=linear_lambda)
-    # criterion = LabelSmoothingLoss(args.num_classes, smoothing=args.smoothing)
-    criterion = CrossEntropyLoss()
+    criterion = LabelSmoothingLoss(smoothing=args.smoothing)
+    # criterion = CrossEntropyLoss()
 
     train_loss = []
     best_f_score = 0.0
@@ -103,13 +112,14 @@ def train():
             loss.backward()
             train_loss.append(loss.item())
 
-            global_steps = epoch*steps_per_epoch + step + 1
+            global_steps = epoch * steps_per_epoch + step + 1
             if global_steps % acc_steps == 0:
                 optimizer.step()
                 scheduler.step(global_steps)
                 optimizer.zero_grad()
                 train_loss_mean = sum(train_loss) / len(train_loss)
                 writer_train.add_scalar('loss', train_loss_mean, global_steps)
+                writer_train.add_scalar('lr', scheduler.get_last_lr()[0], global_steps)
                 train_loss.clear()
                 if global_steps % (acc_steps * 6) == 0:
                     print(f'  epoch {epoch}, step {step + 1}/{steps_per_epoch} loss: ', train_loss_mean)
@@ -119,7 +129,9 @@ def train():
                     total = 0
                     correct = 0
                     dev_loss = 0.0
-                    tps, fps, fns = [0 for _ in range(args.num_classes)], [0 for _ in range(args.num_classes)], [0 for _ in range(args.num_classes)]
+                    tps, fps, fns = [0 for _ in range(args.num_classes)], \
+                                    [0 for _ in range(args.num_classes)], \
+                                    [0 for _ in range(args.num_classes)]
                     for batch in tqdm(dev_dataloader, position=0):
                         batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
                         input_ids, asp_masks, labels = batch
@@ -150,6 +162,7 @@ def train():
                     if f_score > best_f_score:
                         best_f_score = f_score
                         save_model(model, path_prefix=f'{args.dataset_name}_asc', score=best_f_score)
+
 
 if __name__ == '__main__':
     train()
