@@ -1,4 +1,5 @@
 import os
+import re
 import random
 import json
 import xml.etree.ElementTree as et
@@ -26,12 +27,24 @@ def transform_asp(raw_path, out_path):
     with open(out_path, 'w', encoding='utf-8') as f:
         root = parser.getroot()
         for sentence in root.iter('sentence'):
+            RE_TEMPLATE = r"[\w']+|[.,!?;]"
             text = sentence.find('text').text
             text = text.replace('\u00a0', '')
-            text_list = text.split()
+            text_list = re.findall(RE_TEMPLATE, text)
             aspects = sentence.find('aspectTerms')
+            ate_label = ['O' for _ in range(len(text_list))]
+            sentence_aspects = []
             # TODO remove below
             if aspects is None:
+                if (sentence_aspects == []):
+                    print("NO")
+                sentence_sample = {
+                    'id': sentence.get('id'),
+                    'text': text_list,
+                    'aspects': [],
+                    'label': ['O'] * len(text_list)
+                }
+                f.write(json.dumps(sentence_sample) + '\n')
                 continue
             for aspect in aspects.iter('aspectTerm'):
                 term = aspect.get('term')
@@ -39,16 +52,25 @@ def transform_asp(raw_path, out_path):
                 if polar == 'conflict':
                     continue
                 char_start = int(aspect.get('from'))
-                term_list = term.split()
+                # term_list = term.split()
+                term_list = re.findall(RE_TEMPLATE, term)
                 left_text = text[:char_start]
-                start = len(left_text.strip().split()) if len(left_text) > 0 else 0
+                start = len(re.findall(RE_TEMPLATE, left_text.strip())) if len(left_text) > 0 else 0
                 end = start + len(term_list)
+                ate_label[start] = "B"
+                for t in range(start + 1, end):
+                    ate_label[t] = "I"
                 print(term, polar, start, end)
-                sample = {
-                    'text': text_list,
-                    'aspect': [term, label_dict[polar], start, end]
-                }
-                f.write(json.dumps(sample) + '\n')
+                sentence_aspects.append([term, label_dict[polar], start, end])
+            sentence_sample = {
+                'id': sentence.get('id'),
+                'text': text_list,
+                'aspects': sentence_aspects,
+                'label': ate_label
+            }
+            if (sentence_aspects == []):
+                continue
+            f.write(json.dumps(sentence_sample) + '\n')
 
 def split(data_path, train_path, dev_path, percent=0.2):
     train_f = open(train_path, 'w', encoding='utf-8')

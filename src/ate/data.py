@@ -20,17 +20,20 @@ def collate_batch(batch):
     batch_attn_masks = []
     batch_token_type_ids = []
     batch_labels = []
+    batch_seq_lens = []
     for sample in batch:
-        token_ids, attn_mask, token_type_ids, label = sample
+        token_ids, attn_mask, token_type_ids, label, seq_lens = sample
         batch_token_ids.append(token_ids)
         batch_attn_masks.append(attn_mask)
         batch_token_type_ids.append(token_type_ids)
         batch_labels.append(label)
+        batch_seq_lens.append(seq_lens)
 
     return torch.tensor(batch_token_ids, dtype=torch.long), \
            torch.tensor(batch_attn_masks, dtype=torch.long), \
            torch.tensor(batch_token_type_ids, dtype=torch.long), \
-           torch.tensor(batch_labels, dtype=torch.long)
+           torch.tensor(batch_labels, dtype=torch.long), \
+           batch_seq_lens
 
 class SemAEDataset(Dataset):
     def __init__(self, tokenizer, data_dir, data_name, data_type, ignore_index=-100, max_seq_len=128):
@@ -42,57 +45,62 @@ class SemAEDataset(Dataset):
         # sep_id = tokenizer.convert_tokens_to_ids(sep)
         pad_id = tokenizer.convert_tokens_to_ids(pad)
         data_path = os.path.join(data_dir, data_name, f'{data_type}.json')
-        cache_path = os.path.join(data_dir, data_name, f'{data_type}_cache.pkl')
-        if os.path.isfile(cache_path):
-            print(f'load dataset from {cache_path}')
-            self.data = load_pkl(cache_path)
-        else:
-            print(f'construct dataset from {data_path}')
-            self.data = []
-            with open(data_path, 'r', encoding='utf-8') as f:
-                data_json = json.load(f)
-                for idx, (key, value) in enumerate(tqdm(data_json.items())):
-                    tokens = []
-                    label_ids = []
-                    text = value['sentence']
-                    labels = value['label']
-                    for word, label in zip(text, labels):
+        print(f'construct dataset from {data_path}')
+        self.data = []
+        with open(data_path, 'r', encoding='utf-8') as f:
+            cnt = 0
+            for line in tqdm(f.readlines()):
+                line = line.strip()
+                line = json.loads(line)
+                tokens = []
+                label_ids = []
+                text = line['text'].copy()
+                labels = line['label'].copy()
+                for idx, (word, label) in enumerate(zip(text, labels)):
+                    if idx == 0:
                         word_tokens = tokenizer.tokenize(word)
-                        tokens.extend(word_tokens)
-                        label_ids.extend([label_dict[label]] + [ignore_index]*(len(word_tokens) - 1))
+                    else:
+                        word_tokens = tokenizer.tokenize(' ' + word)
+                    tokens.extend(word_tokens)
+                    label_ids.extend([label_dict[label]] + [ignore_index] * (len(word_tokens) - 1))
 
-                    tokens = tokenizer.tokenize(cls) + tokens + tokenizer.tokenize(sep)
-                    label_ids = [ignore_index] + label_ids + [ignore_index]
-                    token_type_ids = [0] * len(tokens)
-                    input_ids = tokenizer.convert_tokens_to_ids(tokens)
-                    input_mask = [1]*len(input_ids)
+                special_tokens_count = 3
+                if len(tokens) > max_seq_len - special_tokens_count:
+                    tokens = tokens[:(max_seq_len - special_tokens_count)]
+                    label_ids = label_ids[:(max_seq_len - special_tokens_count)]
 
-                    pad_length = max_seq_len - len(input_ids)
-                    input_ids += ([pad_id]*pad_length)
-                    label_ids += ([0]*pad_length)
-                    token_type_ids += ([0]*pad_length)
-                    input_mask += ([0]*pad_length)
+                tokens = [cls] + tokens + [sep]
+                label_ids = [ignore_index] + label_ids + [ignore_index]
+                token_type_ids = [0] * len(tokens)
+                input_ids = tokenizer.convert_tokens_to_ids(tokens)
+                input_mask = [1] * len(input_ids)
+                seq_lens = len(input_ids)
 
-                    assert len(input_ids) == max_seq_len
-                    assert len(label_ids) == max_seq_len
-                    assert len(token_type_ids) == max_seq_len
-                    assert len(input_mask) == max_seq_len
+                pad_length = max_seq_len - len(input_ids)
+                input_ids += ([pad_id] * pad_length)
+                label_ids += ([0] * pad_length)
+                token_type_ids += ([0] * pad_length)
+                input_mask += ([0] * pad_length)
 
-                    input_ids = torch.tensor(input_ids, dtype=torch.long)
-                    attention_mask = torch.tensor(input_mask, dtype=torch.long)
-                    token_type_ids = torch.tensor(token_type_ids, dtype=torch.long)
-                    label = torch.tensor(label_ids, dtype=torch.long)
+                assert len(input_ids) == max_seq_len
+                assert len(label_ids) == max_seq_len
+                assert len(token_type_ids) == max_seq_len
+                assert len(input_mask) == max_seq_len
 
-                    if idx < 5:
-                        print("*** Example ***")
-                        print("tokens:", " ".join([str(x) for x in tokens]))
-                        print("input_ids:", " ".join([str(x) for x in input_ids]))
-                        print("input_mask:", " ".join([str(x) for x in input_mask]))
-                        print("segment_ids:", " ".join([str(x) for x in token_type_ids]))
-                        print("label_ids:", " ".join([str(x) for x in label_ids]))
+                # input_ids = torch.tensor(input_ids, dtype=torch.long)
+                # attention_mask = torch.tensor(input_mask, dtype=torch.long)
+                # token_type_ids = torch.tensor(token_type_ids, dtype=torch.long)
+                # label = torch.tensor(label_ids, dtype=torch.long)
 
-                    self.data.append((input_ids, attention_mask, token_type_ids, label))
-            save_pkl(self.data, cache_path)
+                if cnt < 5:
+                    print("*** Example ***")
+                    print("tokens:", tokenizer.decode(tokenizer.convert_tokens_to_ids(tokens)))
+                    print("input_ids:", " ".join([str(x) for x in input_ids]))
+                    print("input_mask:", " ".join([str(x) for x in input_mask]))
+                    print("segment_ids:", " ".join([str(x) for x in token_type_ids]))
+                    print("label_ids:", " ".join([str(x) for x in label_ids]))
+                cnt += 1
+                self.data.append((input_ids, input_mask, token_type_ids, label_ids, seq_lens))
 
     def __len__(self):
         return len(self.data)

@@ -12,7 +12,7 @@ from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from transformers import RobertaTokenizer, RobertaModel, XLMRobertaTokenizer, XLMRobertaModel, WEIGHTS_NAME
+from transformers import RobertaTokenizer, RobertaModel, WEIGHTS_NAME, BertTokenizer, BertModel
 from asc.model import AspectClassifier
 from asc.data import SemDataset, collate_batch
 from asc.criterion import LabelSmoothingLoss
@@ -26,19 +26,14 @@ def train():
                         help="Path or url of the dataset. If empty download from S3.")
     parser.add_argument("--dataset_name", type=str, default='restaurant',
                         help="Dataset name.", choices=['restaurant', 'laptop'])
-    parser.add_argument("--model_name", type=str, default='roberta',
-                        help="Dataset name.", choices=['xlm', 'roberta'])
-    # parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
-    parser.add_argument("--model_checkpoint", type=str, default='roberta-large',
-                        choices=['roberta-base', 'xlm-roberta-base', 'roberta-large'],
+    parser.add_argument("--model_name", type=str, default='bert-base-uncased',
+                        choices=['roberta-base', 'xlm-roberta-base', 'roberta-large', 'bert-base-uncased'],
                         help="Path, url or short name of the model")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training")
     parser.add_argument("--acc_batch_size", type=int, default=32,
                         help="Accumulate gradients on several steps")
     parser.add_argument("--lr", type=float, default=2e-5, help="Learning rate")
     parser.add_argument("--n_epochs", type=int, default=40, help="Number of training epochs")
-    parser.add_argument("--eval_before_start", action='store_true',
-                        help="If true start with a first evaluation before training")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")
     parser.add_argument("--warmup_rate", type=float, default=0.01, help="Warm up steps")
@@ -49,7 +44,7 @@ def train():
     args = parser.parse_args()
     acc_steps = args.acc_batch_size // args.batch_size
 
-    log_mark = f'{args.model_name}_{args.batch_size}_{args.lr}_{args.dropout}_{args.smoothing}'
+    log_mark = f'{args.batch_size}_{args.lr}_{args.dropout}_{args.smoothing}'
     log_dir_base = 'logs/asc_{}_{}_{}'.format(args.dataset_name,
                                               time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime(time.time())), log_mark)
     log_dir_train = log_dir_base + '_train'
@@ -57,11 +52,11 @@ def train():
     writer_train = SummaryWriter(os.path.join(MAIN_PATH, log_dir_train), flush_secs=5)
     writer_dev = SummaryWriter(os.path.join(MAIN_PATH, log_dir_dev), flush_secs=5)
 
-    tokenizer_class = RobertaTokenizer if args.model_name == 'roberta' else XLMRobertaTokenizer
-    transformer_class = RobertaModel if args.model_name == 'roberta' else XLMRobertaModel
-    tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint)
-    tokenizer.save_pretrained(MODEL_PATH)
-    transformer = transformer_class.from_pretrained(args.model_checkpoint, mirror='tuna')
+    tokenizer_class = BertTokenizer
+    transformer_class = BertModel
+    tokenizer = tokenizer_class.from_pretrained(args.model_name)
+    tokenizer.save_pretrained(os.path.join(MODEL_PATH, 'asc_tokenizer'))
+    transformer = transformer_class.from_pretrained(args.model_name)
     model = AspectClassifier(transformer, dropout=args.dropout)
     model = model.to(args.device)
 
@@ -95,10 +90,10 @@ def train():
         (epoch - total_steps) / (warmup_steps - total_steps), 0)
     scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=linear_lambda)
     criterion = LabelSmoothingLoss(smoothing=args.smoothing)
-    # criterion = CrossEntropyLoss()
 
     train_loss = []
     best_f_score = 0.0
+    last_train_loss = 0.0
     for epoch in range(args.n_epochs):
         for step, batch in enumerate(tqdm(train_dataloader)):
             model.train()
@@ -107,8 +102,6 @@ def train():
             output = model(input_ids, asp_masks)
             loss = criterion(output, labels)
             loss = loss.mean() / acc_steps
-            if loss.item() > 10:
-                print('===========================')
             loss.backward()
             train_loss.append(loss.item())
 
@@ -118,6 +111,9 @@ def train():
                 scheduler.step(global_steps)
                 optimizer.zero_grad()
                 train_loss_mean = sum(train_loss) / len(train_loss)
+                if last_train_loss != 0.0 and last_train_loss + 0.2 < train_loss_mean and last_train_loss < 0.05:
+                    print(input_ids)
+                last_train_loss = train_loss_mean
                 writer_train.add_scalar('loss', train_loss_mean, global_steps)
                 writer_train.add_scalar('lr', scheduler.get_last_lr()[0], global_steps)
                 train_loss.clear()
@@ -159,7 +155,8 @@ def train():
                     writer_dev.add_scalar('f1', f_score, global_steps)
                     writer_dev.add_scalar('pre', pre_sum / args.num_classes, global_steps)
                     writer_dev.add_scalar('rec', rec_sum / args.num_classes, global_steps)
-                    if f_score > best_f_score:
+                    print(f'  dev_loss {dev_loss}, f1 {f_score}, acc {correct / total}')
+                    if f_score > best_f_score and f_score > 0.8:
                         best_f_score = f_score
                         save_model(model, path_prefix=f'{args.dataset_name}_asc', score=best_f_score)
 

@@ -52,7 +52,7 @@ def collate_batch(batch):
         batch_labels.append(labels)
 
     batch_token_ids = padded_tensor(batch_token_ids, pad_idx=1) # TODO fix hard encode
-    batch_asp_masks = padded_tensor(batch_asp_masks)
+    batch_asp_masks = padded_tensor(batch_asp_masks, pad_idx=0)
     return batch_token_ids, batch_asp_masks, torch.tensor(batch_labels)
 
 class SemDataset(Dataset):
@@ -61,37 +61,38 @@ class SemDataset(Dataset):
         cls = tokenizer.cls_token
         sep = tokenizer.sep_token
         data_path = os.path.join(data_dir, data_name, f'{data_type}.json')
-        cache_path = os.path.join(data_dir, data_name, f'{data_type}_cache.pkl')
-        if os.path.isfile(cache_path):
-            print(f'load dataset from {cache_path}')
-            self.data = load_pkl(cache_path)
-        else:
-            print(f'construct dataset from {data_path}')
-            self.data = []
-            with open(data_path, 'r', encoding='utf-8') as f:
-                for line in tqdm(f.readlines()):
-                    line = line.strip()
-                    line = json.loads(line)
+        print(f'construct dataset from {data_path}')
+        self.data = []
+        with open(data_path, 'r', encoding='utf-8') as f:
+            for line in tqdm(f.readlines()):
+                line = line.strip()
+                line = json.loads(line)
 
-                    text = line['text']
-                    aspect = line['aspect']
+                aspects = line['aspects'].copy()
+                for aspect in aspects:
+                    if aspect == None:
+                        continue
+                    text = line['text'].copy()
                     text = [cls] + text + [sep]
                     start, end = aspect[2] + 1, aspect[3] + 1
                     asp_mask = [0] * len(text)
                     for idx in range(start, end):
                         asp_mask[idx] = 1
-                    # tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(text))
                     pieces = []
                     piece_masks = []
-                    for mask, token in zip(asp_mask, text):
-                        bpes = tokenizer.convert_tokens_to_ids(
-                            tokenizer.tokenize(token)
-                        )
+                    for idx, (mask, token) in enumerate(zip(asp_mask, text)):
+                        if idx < 2 or idx == len(text) - 1:
+                            bpes = tokenizer.convert_tokens_to_ids(
+                                tokenizer.tokenize(token)
+                            )
+                        else:
+                            bpes = tokenizer.convert_tokens_to_ids(
+                                tokenizer.tokenize(' ' + token)
+                            )
                         pieces.extend(bpes)
                         piece_masks.extend([mask]*len(bpes))
-
+                    assert len(pieces) == len(piece_masks)
                     self.data.append((pieces, piece_masks, aspect[1]))
-            save_pkl(self.data, cache_path)
 
     def __len__(self):
         return len(self.data)

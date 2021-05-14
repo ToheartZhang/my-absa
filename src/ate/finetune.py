@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from transformers import RobertaTokenizer, RobertaForTokenClassification, RobertaConfig, WEIGHTS_NAME
 from transformers import AdamW, get_linear_schedule_with_warmup
+from sklearn.metrics import classification_report
 from ate.data import SemAEDataset, collate_batch
 from cfg import *
 from utils import compute_f_score, save_model
@@ -24,8 +25,8 @@ def train():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default=DATA_PATH,
                         help="Path or url of the dataset. If empty download from S3.")
-    parser.add_argument("--dataset_name", type=str, default='ate_restaurant',
-                        help="Dataset name.", choices=['ate_restaurant', 'ate_laptop'])
+    parser.add_argument("--dataset_name", type=str, default='laptop',
+                        help="Dataset name.", choices=['restaurant', 'laptop'])
     parser.add_argument("--model_name", type=str, default='roberta',
                         help="Model name")
     parser.add_argument("--model_checkpoint", type=str, default='roberta-base',
@@ -40,8 +41,9 @@ def train():
     parser.add_argument("--warmup_steps", type=int, default=0, help="Warm up steps")
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--max_grad_norm", type=float, default=1.0)
-    parser.add_argument("--do_lower_case", type=bool, default=True)
+    parser.add_argument("--do_lower_case", type=bool, default=False)
     parser.add_argument("--valid_steps", type=int, default=50, help="Perfom validation every X steps")
+    parser.add_argument("--num_classes", type=int, default=3, help="Num of classes for classification")
     args = parser.parse_args()
 
     log_mark = f'{args.batch_size}_{args.lr}'
@@ -54,7 +56,7 @@ def train():
     transformer_class, tokenizer_class, config_class = MODEL_CLASS[args.model_name]
     config = config_class.from_pretrained(args.model_checkpoint, num_labels=3)
     tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint, do_lower_case=args.do_lower_case)
-    tokenizer.save_pretrained(os.path.join(MODEL_PATH, args.dataset_name + 'ate'))
+    tokenizer.save_pretrained(os.path.join(MODEL_PATH, 'ate_tokenizer'))
     model = transformer_class.from_pretrained(args.model_checkpoint, mirror='tuna', config=config)
     model = model.to(args.device)
 
@@ -86,11 +88,11 @@ def train():
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=total_steps)
 
     train_loss = []
-    best_dev_loss = float('inf')
+    best_f_score = 0.0
     for epoch in range(args.n_epochs):
         for step, batch in enumerate(tqdm(train_dataloader)):
             model.train()
-            batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
+            batch = tuple(input_tensor.to(args.device) for input_tensor in batch[:-1])
             input = {
                 "input_ids": batch[0],
                 "attention_mask": batch[1],
@@ -117,22 +119,46 @@ def train():
                 model.eval()
                 with torch.no_grad():
                     dev_loss = 0.0
+                    total_tokens = 0
+                    y_true = []
+                    y_pred = []
                     for batch in tqdm(dev_dataloader, position=0):
-                        batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
+                        # batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
                         input = {
-                            "input_ids": batch[0],
-                            "attention_mask": batch[1],
-                            "token_type_ids": batch[2],
-                            "labels": batch[3]
+                            "input_ids": batch[0].to(args.device),
+                            "attention_mask": batch[1].to(args.device),
+                            "token_type_ids": batch[2].to(args.device),
+                            "labels": batch[3].to(args.device)
                         }
+                        labels, seq_lens = batch[3:5]
                         output = model(**input)
                         loss, logits = output[:2]
+                        _, pred = torch.max(logits, dim=2)
+                        for i in range(pred.size(0)):
+                            for j in range(seq_lens[i]):
+                                if labels[i, j] == -100 or (labels[i, j] == 0 and pred[i, j] == 0):
+                                    continue
+                                y_true.append(labels[i, j].item())
+                                y_pred.append(pred[i, j].item())
                         dev_loss += loss.item()
+                        total_tokens += sum(seq_lens)
                     dev_loss /= len(dev_dataloader)
+                    report = classification_report(y_true, y_pred, output_dict=True)
+                    print(classification_report(y_true, y_pred))
+                    macro_precision = report['weighted avg']['precision']
+                    macro_recall = report['weighted avg']['recall']
+                    macro_f1 = report['weighted avg']['f1-score']
+                    accuracy = report['accuracy']
                     writer_dev.add_scalar('loss', dev_loss, global_steps)
-                    if dev_loss < best_dev_loss:
-                        best_dev_loss = dev_loss
-                        save_model(model, path_prefix=f'{args.dataset_name}_ate', score=best_dev_loss)
+                    writer_dev.add_scalar('acc', accuracy, global_steps)
+                    writer_dev.add_scalar('f1', macro_f1, global_steps)
+                    writer_dev.add_scalar('pre', macro_precision, global_steps)
+                    writer_dev.add_scalar('rec', macro_recall, global_steps)
+                    print(f'  dev_loss {dev_loss}, f1 {macro_f1}, acc {accuracy}')
+
+                    if macro_f1 > best_f_score and macro_f1 > 0.63:
+                        best_f_score = macro_f1
+                        save_model(model, path_prefix=f'{args.dataset_name}_ate', score=best_f_score)
 
 if __name__ == '__main__':
     train()
