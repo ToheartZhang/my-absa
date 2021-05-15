@@ -24,6 +24,8 @@ MODEL_CLASS = {
 
 def get_ate_f_score(y_preds, y_trues, b=1):
     common, relevant, retrieved = 0., 0., 0.
+    pred_terms = []
+    true_terms = []
     for y_pred, y_true in zip(y_preds, y_trues):
         idx = 0
         sample_pred_terms = []
@@ -36,7 +38,8 @@ def get_ate_f_score(y_preds, y_trues, b=1):
                     idx += 1
                 end = idx
                 sample_pred_terms.append((start, end))
-            idx += 1
+            else:
+                idx += 1
         idx = 0
         while idx < len(y_true):
             if y_true[idx] == 1:
@@ -46,17 +49,29 @@ def get_ate_f_score(y_preds, y_trues, b=1):
                     idx += 1
                 end = idx
                 sample_true_terms.append((start, end))
-            idx += 1
+            else:
+                idx += 1
         common += len([a for a in sample_pred_terms if a in sample_true_terms])
         retrieved += len(sample_pred_terms)
         relevant += len(sample_true_terms)
+        pred_terms.append(sample_pred_terms)
+        true_terms.append(sample_true_terms)
     p = common / retrieved if retrieved > 0 else 0.
     r = common / relevant
     f1 = (1 + (b ** 2)) * p * r / ((p * b ** 2) + r) if p > 0 and r > 0 else 0.
-    return p, r, f1, common, retrieved, relevant
+
+    cnt = 0
+    matched_ids = []
+    for s_true_terms, s_pred_terms in zip(true_terms, pred_terms):
+        for t in s_true_terms:
+            if t in s_pred_terms:
+                matched_ids.append(cnt)
+            cnt += 1
+    print("Total true terms: ", cnt)
+    return p, r, f1, common, retrieved, relevant, matched_ids
 
 
-def evalute():
+def ate_evaluate():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default=DATA_PATH,
                         help="Path or url of the dataset. If empty download from S3.")
@@ -113,12 +128,13 @@ def evalute():
                 sample_y_pred.append(pred[i, j].item())
             y_pred.append(sample_y_pred)
             y_true.append(sample_y_true)
-    p, r, f1, common, retrieved, relevant = get_ate_f_score(y_pred, y_true)
+    p, r, f1, common, retrieved, relevant, matched_ids = get_ate_f_score(y_pred, y_true)
     print(f'f1: {f1}\tprecision: {p}\trecall: {r}\tacc: {common / retrieved}')
+    return matched_ids
 
 
 if __name__ == '__main__':
-    evalute()
+    ate_evaluate()
 
 """
 laptop

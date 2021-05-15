@@ -18,7 +18,7 @@ from asc.criterion import LabelSmoothingLoss
 from cfg import *
 from utils import compute_f_score, save_model
 
-def evaluate():
+def asc_evaluate(matched_ids=None):
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default=DATA_PATH,
                         help="Path or url of the dataset. If empty download from S3.")
@@ -37,11 +37,11 @@ def evaluate():
     tokenizer = RobertaTokenizer.from_pretrained(args.model_checkpoint)
     transformer = RobertaModel.from_pretrained('roberta-base', mirror='tuna')
     model = AspectClassifier(transformer, dropout=args.dropout)
-    model.load_state_dict(torch.load(os.path.join(MODEL_PATH, args.dataset_name + '_asc', '2021-05-14_14-57-50_0.8228146770345756.pt')), strict=True)
+    model.load_state_dict(torch.load(os.path.join(MODEL_PATH, args.dataset_name + '_asc', '2021-05-14_14-52-26_0.8112966577507387.pt')), strict=True)
     # model.load_state_dict(torch.load(os.path.join(MODEL_PATH, args.dataset_name + '_asc', '2021-05-09_23-00-20_0.7798739261789357.pt')))
     model = model.to(args.device)
 
-    test_dataset = SemDataset(tokenizer, args.dataset_path, args.dataset_name, 'test')
+    test_dataset = SemDataset(tokenizer, args.dataset_path, args.dataset_name, 'test', matched_ids)
     test_dataloader = DataLoader(test_dataset, args.batch_size, shuffle=False, collate_fn=collate_batch)
 
     model.eval()
@@ -73,7 +73,7 @@ def evaluate():
         print(f'f1: {f_score}\tprecision: {pre}\trecall: {rec}\tacc: {correct/total}')
 
 if __name__ == '__main__':
-    evaluate()
+    asc_evaluate()
 
 """
 restaurant roberta 2021-05-10_17-40-37_0.800588572778863.pt

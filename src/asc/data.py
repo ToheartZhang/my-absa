@@ -56,13 +56,14 @@ def collate_batch(batch):
     return batch_token_ids, batch_asp_masks, torch.tensor(batch_labels)
 
 class SemDataset(Dataset):
-    def __init__(self, tokenizer, data_dir, data_name, data_type):
+    def __init__(self, tokenizer, data_dir, data_name, data_type, matched_ids=None):
         super(Dataset, self).__init__()
         cls = tokenizer.cls_token
         sep = tokenizer.sep_token
         data_path = os.path.join(data_dir, data_name, f'{data_type}.json')
         print(f'construct dataset from {data_path}')
         self.data = []
+        cnt = 0
         with open(data_path, 'r', encoding='utf-8') as f:
             for line in tqdm(f.readlines()):
                 line = line.strip()
@@ -72,6 +73,10 @@ class SemDataset(Dataset):
                 for aspect in aspects:
                     if aspect == None:
                         continue
+                    if matched_ids is not None and cnt not in matched_ids:
+                        cnt += 1
+                        continue
+                    cnt += 1
                     text = line['text'].copy()
                     text = [cls] + text + [sep]
                     start, end = aspect[2] + 1, aspect[3] + 1
@@ -93,6 +98,8 @@ class SemDataset(Dataset):
                         piece_masks.extend([mask]*len(bpes))
                     assert len(pieces) == len(piece_masks)
                     self.data.append((pieces, piece_masks, aspect[1]))
+        print(f'Total true terms: {cnt}')
+        print(f'Total match terms: {len(self.data)}')
 
     def __len__(self):
         return len(self.data)

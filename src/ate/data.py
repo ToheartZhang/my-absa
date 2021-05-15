@@ -41,8 +41,6 @@ class SemAEDataset(Dataset):
         cls = tokenizer.cls_token
         sep = tokenizer.sep_token
         pad = tokenizer.pad_token
-        # cls_id = tokenizer.convert_tokens_to_ids(cls)
-        # sep_id = tokenizer.convert_tokens_to_ids(sep)
         pad_id = tokenizer.convert_tokens_to_ids(pad)
         data_path = os.path.join(data_dir, data_name, f'{data_type}.json')
         print(f'construct dataset from {data_path}')
@@ -66,6 +64,7 @@ class SemAEDataset(Dataset):
 
                 special_tokens_count = 3
                 if len(tokens) > max_seq_len - special_tokens_count:
+                    print("No")
                     tokens = tokens[:(max_seq_len - special_tokens_count)]
                     label_ids = label_ids[:(max_seq_len - special_tokens_count)]
 
@@ -86,11 +85,6 @@ class SemAEDataset(Dataset):
                 assert len(label_ids) == max_seq_len
                 assert len(token_type_ids) == max_seq_len
                 assert len(input_mask) == max_seq_len
-
-                # input_ids = torch.tensor(input_ids, dtype=torch.long)
-                # attention_mask = torch.tensor(input_mask, dtype=torch.long)
-                # token_type_ids = torch.tensor(token_type_ids, dtype=torch.long)
-                # label = torch.tensor(label_ids, dtype=torch.long)
 
                 if cnt < 5:
                     print("*** Example ***")
