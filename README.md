@@ -45,6 +45,8 @@ Roberta + MLP for classifying given terms.
 
 ![](assets/asc-roberta.png)
 
+All of results are performed based on Roberta-base.
+
 ## Results
 
 | Tasks   | Macro F1 | Accuracy |
