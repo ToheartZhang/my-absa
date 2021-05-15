@@ -5,6 +5,12 @@ My reimplementation of Aspect Terms Extraction and Aspect Sentiment Classificati
 
 [SemEval-2014 Task 4](https://alt.qcri.org/semeval2014/task4/)
 
+### Example
+
+```json
+{"id": "3121", "text": ["But", "the", "staff", "was", "so", "horrible", "to", "us", "."], "aspects": [["staff", 2, 2, 3]], "label": ["O", "O", "B", "O", "O", "O", "O", "O", "O"]}
+```
+
 ## Evaluation
 
 ### ATE subtask
